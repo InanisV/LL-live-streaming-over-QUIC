@@ -39,8 +39,8 @@ for filename, stall_count in stall_counts.items():
     grouped_data_stalls[protocol][algorithm] = stall_count
 
 # Plotting
-fig, ax = plt.subplots(figsize=(22, 9))
-bar_width = 0.12
+fig, ax = plt.subplots(figsize=(10, 6))
+bar_width = 0.15
 indices = np.arange(len(protocols_order_corrected))
 
 # Create bars for each algorithm within each protocol group
@@ -49,17 +49,12 @@ for i, algorithm in enumerate(algorithms_order):
     ax.bar(indices + i * bar_width, stall_values, width=bar_width, label=algorithm)
 
 # Set chart labels and title
-# ax.set_xlabel('Protocol')
-ax.set_ylabel('Number of Stalls', fontsize=28)
-# ax.set_title('Number of Stalls by Protocol and Algorithm')
+ax.set_xlabel('Protocol')
+ax.set_ylabel('Number of Stalls')
+ax.set_title('Number of Stalls by Protocol and Algorithm')
 ax.set_xticks(indices + bar_width / 2 * (len(algorithms_order) - 1))
-ax.set_xticklabels(['HTTP/2', 'quic-go', 'aioquic'], fontsize=28)
-ax.legend(fontsize=28)
-
-# Customize y-axis range and tick labels
-ax.set_ylim(0, 160)
-ax.set_yticks(np.linspace(0, 160, 7))  # Creates 7 evenly spaced ticks from 0 to 1200
-ax.set_yticklabels(np.linspace(0, 160, 7).astype(int), fontsize=24)  # Converts ticks to integer for display
+ax.set_xticklabels(protocols_order_corrected)
+ax.legend()
 
 # Customize appearance
 ax.spines['top'].set_visible(False)
@@ -68,5 +63,5 @@ ax.yaxis.grid(True)  # Only show horizontal grid lines
 ax.set_axisbelow(True)
 
 plt.tight_layout()
-plt.savefig('./stall_counts_chart_for_paper.png', format='png')
+plt.savefig('./stall_counts_chart_for_paper.pdf', format='pdf')
 plt.show()

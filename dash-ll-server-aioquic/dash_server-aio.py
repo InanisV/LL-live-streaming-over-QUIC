@@ -28,6 +28,116 @@ import aiofiles
 import asyncio
 
 
+# class Http3ServerProtocol(QuicConnectionProtocol):
+#     def __init__(self, *args, **kwargs):
+#         super().__init__(*args, **kwargs)
+#         self.http = H3Connection(self._quic)
+
+#     def quic_event_received(self, event):
+#         if isinstance(event, StreamDataReceived):
+#             self.http.handle_event(event)
+#         if isinstance(event, HeadersReceived):
+#             self.handle_request(event)
+
+#     def handle_request(self, event):
+#         method, path, headers, _ = event.headers
+#         response_headers = [(b"server", b"aiodemo/0.1")]
+#         if method == b"GET":
+#             content_path = os.path.join("path_to_content", path.decode())
+#             if os.path.exists("./media"):
+#                 content_type, _ = mimetypes.guess_type(content_path)
+#                 with open(content_path, 'rb') as file:
+#                     response_headers.extend([
+#                         (b"content-type", content_type.encode()),
+#                         (b"status", b"200")
+#                     ])
+#                     data = file.read()
+#                     self.http.send_headers(event.stream_id, response_headers, end_stream=False)
+#                     self.http.send_data(event.stream_id, data, end_stream=True)
+#             else:
+#                 response_headers.append((b"status", b"404"))
+#                 self.http.send_headers(event.stream_id, response_headers, end_stream=True)
+
+
+class DashQUICServerProtocol(QuicConnectionProtocol):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._http = H3Connection(self._quic)
+
+    def _decode_path(self, encoded_path):
+        # FIXME implement unquoting
+        return encoded_path
+
+    def quic_event_received(self, event):
+        if isinstance(event, H3Event):
+            self.handle_http_event(event)
+
+    async def _serve_local(self, stream_id, path):
+# Open files asynchronously using aiofiles        async with aiofiles.open(path, 'rb') as infile:
+# Get file status information to read the file size            stat = await infile.stat()
+
+            # Send HTTP response headers
+            self._http.send_headers(
+                stream_id=stream_id,
+                headers=[
+                    (b":status", b"200"),
+                    (b"content-length", str(stat.st_size).encode()),
+                    (b"access-control-allow-origin", b"*")
+                ],
+                end_stream=False
+            )
+            while True:
+                data = await infile.read(65536)  # Read in blocks, e.g. 65536 bytes per block
+                if not data:
+                    break
+                self._http.send_data(stream_id=stream_id, data=data, end_stream=False)
+            self._http.send_data(stream_id=stream_id, data=b'', end_stream=True)  
+        
+    def _log_request(self):
+        self._logger.info('%s: %s', str(self.client_address), self.requestline)
+        self._logger.debug('headers:\n%s', self.headers)       
+
+    async def handle_http_event(self, event):
+        if isinstance(event, HeadersReceived):
+            method = path = None
+            for header, value in event.headers:
+                if header == b":method":
+                    method = value.decode()
+                elif header == b":path":
+                    path = value.decode()
+            if method == "GET":
+                await self.handle_get_request(event.stream_id, path)
+        elif isinstance(event, DataReceived):
+            pass
+    
+
+    async def handle_get_request(self, stream_id, path):
+        self._log_request()
+
+        local_path = self._decode_path(self.path)  
+
+        outpath = '%s/%s' % ("/home/streaming/dash-ll-server-aioquic/media", local_path)
+        if os.path.exists(outpath):  
+            self._logger.info('serve local: %s', local_path)  
+            return self._serve_local(outpath)  
+        else:
+            self._http.send_headers(
+            stream_id=stream_id,
+            headers=[(b":status", b"404"), (b"server", b"aioquic")],
+            end_stream=True
+        )  
+            return
+        
+async def run_server():
+    configuration = QuicConfiguration(is_client=False, alpn_protocols=H3_ALPN)
+    configuration.load_cert_chain('/home/streaming/dash-ll-server-aioquic/cert.pem', '/home/streaming/dash-ll-server-aioquic/key.pem')
+    serverawait = serve('0.0.0.0', 9000, configuration=configuration, create_protocol=DashQUICServerProtocol)
+    try:
+        await asyncio.Future()  
+    finally:
+        server.close()
+        await server.wait_closed()
+
 class HTTPChunkedRequestReader:
 
     _stream = None
@@ -194,6 +304,41 @@ class DashRequestHandler(hs.BaseHTTPRequestHandler):
         self._logger.info('%s: %s', str(self.client_address), self.requestline)
         self._logger.debug('headers:\n%s', self.headers)
 
+
+    def do_GET(self):
+        self._log_request()
+
+        local_path = self._decode_path(self.path)
+        outpath = '%s/%s' % (self.server.serve_dir, local_path)
+        try:
+            ds = self.server._streams[local_path]
+        except KeyError:
+            if os.path.exists(outpath):
+                self._logger.info('serve local: %s', local_path)
+                return self._serve_local(outpath)
+            else:
+                self.send_error(HTTPStatus.NOT_FOUND)
+
+            return
+
+        self.send_response(HTTPStatus.OK)
+        self.send_header('Transfer-Encoding', 'chunked')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+
+        chunk = 0
+        while True:
+            data = ds.read(chunk)
+            if len(data) == 0:
+                self.wfile.write(b'0\r\n\r\n')
+                break
+
+            chunk += 1
+
+            self.wfile.write(hex(len(data))[2:].encode('ascii') + b'\r\n')
+            self.wfile.write(data)
+            self.wfile.write(b'\r\n')
+
     def do_POST(self):
         self._log_request()
 
@@ -241,81 +386,7 @@ class DashRequestHandler(hs.BaseHTTPRequestHandler):
     def do_PUT(self):
         return self.do_POST()            
 
-class DashQUICServerProtocol(QuicConnectionProtocol):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._http = H3Connection(self._quic)
 
-    def _decode_path(self, encoded_path):
-        # FIXME implement unquoting
-        return encoded_path
-
-    def quic_event_received(self, event):
-        if isinstance(event, H3Event):
-            self.handle_http_event(event)
-
-    async def _serve_local(self, stream_id, path):
-        # 使用aiofiles异步打开文件
-        async with aiofiles.open(path, 'rb') as infile:
-            # 获取文件状态信息以读取文件大小
-            stat = await infile.stat()
-
-            # 发送HTTP响应头部
-            self._http.send_headers(
-                stream_id=stream_id,
-                headers=[
-                    (b":status", b"200"),
-                    (b"content-length", str(stat.st_size).encode()),
-                    (b"access-control-allow-origin", b"*")
-                ],
-                end_stream=False
-            )
-
-            # 异步读取文件并发送内容
-            while True:
-                data = await infile.read(65536)  # 以块的方式读取，例如每块65536字节
-                if not data:
-                    break
-                self._http.send_data(stream_id=stream_id, data=data, end_stream=False)
-            # 完成文件传输
-            self._http.send_data(stream_id=stream_id, data=b'', end_stream=True)  
-        
-    def _log_request(self):
-        self._logger.info('%s: %s', str(self.client_address), self.requestline)
-        self._logger.debug('headers:\n%s', self.headers)       
-
-    async def handle_http_event(self, event):
-        if isinstance(event, HeadersReceived):
-            # Determine the request method and path
-            method = path = None
-            for header, value in event.headers:
-                if header == b":method":
-                    method = value.decode()
-                elif header == b":path":
-                    path = value.decode()
-            if method == "GET":
-                await self.handle_get_request(event.stream_id, path)
-        elif isinstance(event, DataReceived):
-            # Handle incoming data (not used in GET)
-            pass
-    
-
-    async def handle_get_request(self, stream_id, path):
-        self._log_request()
-
-        local_path = self._decode_path(self.path)  # 解码请求的路径
-
-        outpath = '%s/%s' % ("/home/streaming/dash-ll-server-aioquic/media", local_path)
-        if os.path.exists(outpath):  # 检查文件是否存在
-            self._logger.info('serve local: %s', local_path)  # 记录服务本地文件的日志
-            return self._serve_local(outpath)  # 服务本地文件
-        else:
-            self._http.send_headers(
-            stream_id=stream_id,
-            headers=[(b":status", b"404"), (b"server", b"aioquic")],
-            end_stream=True
-        )  # 文件不存在时发送404错误
-            return
 
 
 
@@ -354,46 +425,7 @@ class DashServer(hs.ThreadingHTTPServer):
 
         super().__init__(address, DashRequestHandler)
 
-# class Http3ServerProtocol(QuicConnectionProtocol):
-#     def __init__(self, *args, **kwargs):
-#         super().__init__(*args, **kwargs)
-#         self.http = H3Connection(self._quic)
 
-#     def quic_event_received(self, event):
-#         if isinstance(event, StreamDataReceived):
-#             self.http.handle_event(event)
-#         if isinstance(event, HeadersReceived):
-#             self.handle_request(event)
-
-#     def handle_request(self, event):
-#         method, path, headers, _ = event.headers
-#         response_headers = [(b"server", b"aiodemo/0.1")]
-#         if method == b"GET":
-#             content_path = os.path.join("path_to_content", path.decode())
-#             if os.path.exists("./media"):
-#                 content_type, _ = mimetypes.guess_type(content_path)
-#                 with open(content_path, 'rb') as file:
-#                     response_headers.extend([
-#                         (b"content-type", content_type.encode()),
-#                         (b"status", b"200")
-#                     ])
-#                     data = file.read()
-#                     self.http.send_headers(event.stream_id, response_headers, end_stream=False)
-#                     self.http.send_data(event.stream_id, data, end_stream=True)
-#             else:
-#                 response_headers.append((b"status", b"404"))
-#                 self.http.send_headers(event.stream_id, response_headers, end_stream=True)
-
-async def run_server():
-    configuration = QuicConfiguration(is_client=False, alpn_protocols=H3_ALPN)
-    configuration.load_cert_chain('/home/streaming/dash-ll-server-aioquic/cert.pem', '/home/streaming/dash-ll-server-aioquic/key.pem')
-    serverawait = serve('0.0.0.0', 9000, configuration=configuration, create_protocol=DashQUICServerProtocol)
-        # 保持服务器运行
-    try:
-        await asyncio.Future()  # 永远等待直到有取消或异常发生
-    finally:
-        server.close()
-        await server.wait_closed()
 
 
 

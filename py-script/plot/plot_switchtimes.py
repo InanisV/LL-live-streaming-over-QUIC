@@ -39,8 +39,8 @@ for filename, switch_count in switches_count.items():
     grouped_data[protocol][algorithm] = switch_count
 
 # Plot the grouped bar chart
-fig, ax = plt.subplots(figsize=(22, 9))
-bar_width = 0.12
+fig, ax = plt.subplots(figsize=(10, 6))
+bar_width = 0.15
 indices = np.arange(len(protocols_order_corrected))
 
 # Create bars for each algorithm within each protocol group
@@ -49,11 +49,11 @@ for i, algorithm in enumerate(algorithms_order):
     ax.bar(indices + i * bar_width, counts, width=bar_width, label=algorithm)
 
 # Set the x-axis and y-axis labels, and chart title
-# ax.set_xlabel('Protocol')
-ax.set_ylabel('Number of Video Bitrate Switches', fontsize=28)
-# ax.set_title('Switches by Protocol and Algorithm')
+ax.set_xlabel('Protocol')
+ax.set_ylabel('Number of VideoBitrate Switches')
+ax.set_title('Switches by Protocol and Algorithm')
 ax.set_xticks(indices + bar_width / 2 * (len(algorithms_order) - 1))
-ax.set_xticklabels(['HTTP/2', 'quic-go', 'aioquic'], fontsize=28)
+ax.set_xticklabels(protocols_order_corrected)
 
 # Customize the plot to be more formal for paper
 ax.spines['top'].set_visible(False)
@@ -62,15 +62,10 @@ ax.yaxis.grid(True)  # Only show horizontal grid lines
 ax.set_axisbelow(True)
 
 # Customize the legend
-ax.legend(fontsize=28)
-
-# Customize y-axis range and tick labels
-ax.set_ylim(0, 200)
-ax.set_yticks(np.linspace(0, 200, 7))  # Creates 7 evenly spaced ticks from 0 to 1200
-ax.set_yticklabels(np.linspace(0, 200, 7).astype(int), fontsize=24)  # Converts ticks to integer for display
+ax.legend()
 
 # Save the plot to a file
 plt.tight_layout()
-plt.savefig('./switches_chart_for_paper.png', format='png')
+plt.savefig('./switches_chart_for_paper.pdf', format='pdf')
 
 plt.show()
